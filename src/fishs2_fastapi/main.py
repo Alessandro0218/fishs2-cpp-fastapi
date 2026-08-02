@@ -368,13 +368,15 @@ async def _create_voice_from_uploads(
     first_filename = uploaded[0][0]
     resolved_voice_id = _derive_voice_id(voice_id, name, first_filename)
 
-    return voice_store.create(
+    result = voice_store.create(
         resolved_voice_id,
         uploaded,
         model=model,
         language=language,
         prompt_text=prompt_text,
     )
+    engine.clear_prompt_caches()
+    return result
 
 
 @app.get("/health")
@@ -387,6 +389,7 @@ async def health():
         "voice_count": len(voice_store.list_all()),
         "backend": settings.backend,
         "gpu_device": settings.gpu_device,
+        "reference_prompt_cache": engine.prompt_cache_info(),
     }
 
 
@@ -455,6 +458,7 @@ async def create_file_legacy(
 @app.delete("/v1/voices/{voice_id}")
 async def delete_voice(voice_id: str):
     if voice_store.delete(voice_id):
+        engine.clear_prompt_caches()
         return {"deleted": True, "id": voice_id}
     raise APIError(f"Voice '{voice_id}' not found", param="voice_id", code="voice_not_found", status=404)
 

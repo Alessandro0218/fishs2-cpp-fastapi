@@ -21,7 +21,15 @@ def test_speech_unsupported_format():
     assert data["error"]["code"] == "unsupported_format"
 
 
-def test_speech_unsupported_speed_override():
+def test_speech_ignores_speed_override(monkeypatch):
+    captured = {}
+
+    async def fake_generate(request, model_info=None):
+        captured["speed"] = request.speed
+        return b"RIFF" + (b"\x00" * 64)
+
+    monkeypatch.setattr("fishs2_fastapi.main.engine.generate_speech_async", fake_generate)
+
     resp = client.post(
         "/v1/audio/speech",
         json={
@@ -31,9 +39,8 @@ def test_speech_unsupported_speed_override():
             "speed": 1.2,
         },
     )
-    assert resp.status_code == 422
-    data = resp.json()
-    assert data["error"]["code"] == "unsupported_speed"
+    assert resp.status_code == 200
+    assert captured["speed"] == pytest.approx(1.2)
 
 
 def test_speech_instructions_invalid_json():

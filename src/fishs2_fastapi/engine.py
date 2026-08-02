@@ -5,7 +5,12 @@ import logging
 from threading import Lock
 from typing import TYPE_CHECKING
 
-from .errors import APIError, invalid_reference_audio, reference_audio_too_short, unknown_voice
+from .errors import (
+    APIError,
+    invalid_reference_audio,
+    reference_audio_too_short,
+    unknown_voice,
+)
 from .model_loader import S2GenerateParams, S2Runtime, S2SynthesisError
 from .settings import settings
 from .voices import voice_store
@@ -21,16 +26,19 @@ class InferenceEngine:
     def __init__(self):
         self._runtimes: dict[str, S2Runtime] = {}
         self._locks: dict[str, Lock] = {}
+        self._registry_lock = Lock()
 
     def _get_lock(self, model_id: str) -> Lock:
-        if model_id not in self._locks:
-            self._locks[model_id] = Lock()
-        return self._locks[model_id]
+        with self._registry_lock:
+            if model_id not in self._locks:
+                self._locks[model_id] = Lock()
+            return self._locks[model_id]
 
     def _get_runtime(self, backend_model_id: str) -> S2Runtime:
-        if backend_model_id not in self._runtimes:
-            self._runtimes[backend_model_id] = S2Runtime(backend_model_id)
-        return self._runtimes[backend_model_id]
+        with self._registry_lock:
+            if backend_model_id not in self._runtimes:
+                self._runtimes[backend_model_id] = S2Runtime(backend_model_id)
+            return self._runtimes[backend_model_id]
 
     def _resolve_voice_inputs(self, request: CreateSpeechRequest) -> tuple[str | None, str | None]:
         prompt_text = request.reference_text or request.prompt_text
@@ -165,13 +173,35 @@ class InferenceEngine:
                 raise APIError(str(exc), code="generation_failed", status=500) from exc
 
     async def generate_speech_async(self, request: CreateSpeechRequest, model_info: ModelInfo) -> bytes:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, self.generate_speech, request, model_info)
 
+    def clear_prompt_caches(self) -> None:
+        with self._registry_lock:
+            runtime_items = list(self._runtimes.items())
+        for model_id, runtime in runtime_items:
+            with self._get_lock(model_id):
+                runtime.clear_prompt_cache()
+
+    def prompt_cache_info(self) -> dict[str, int]:
+        with self._registry_lock:
+            runtime_items = list(self._runtimes.items())
+        snapshots = [runtime.prompt_cache_info() for _, runtime in runtime_items]
+        return {
+            "entries": sum(item["entries"] for item in snapshots),
+            "capacity_per_model": max(int(settings.reference_prompt_cache_size), 0),
+            "hits": sum(item["hits"] for item in snapshots),
+            "misses": sum(item["misses"] for item in snapshots),
+        }
+
     def refresh(self) -> None:
-        for runtime in self._runtimes.values():
-            runtime.close()
-        self._runtimes.clear()
+        with self._registry_lock:
+            runtime_items = list(self._runtimes.items())
+        for model_id, runtime in runtime_items:
+            with self._get_lock(model_id):
+                runtime.close()
+        with self._registry_lock:
+            self._runtimes.clear()
 
 
 engine = InferenceEngine()

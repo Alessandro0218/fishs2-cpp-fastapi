@@ -26,7 +26,7 @@ def test_generate_default_voice_without_reference(monkeypatch):
     assert audio[:4] == b"RIFF"
 
 
-def test_generate_rejects_speed_override(monkeypatch):
+def test_generate_ignores_speed_override(monkeypatch):
     class FakeRuntime:
         def synthesize_to_wav_bytes(self, **kwargs):
             return b"RIFF" + (b"\x00" * 64)
@@ -41,10 +41,8 @@ def test_generate_rejects_speed_override(monkeypatch):
     )
     model_info = ModelInfo(model_id="fishs2", backend_model_id="fishaudio/s2-pro")
 
-    with pytest.raises(APIError) as exc:
-        engine.generate_speech(request, model_info)
-
-    assert exc.value.code == "unsupported_speed"
+    audio = engine.generate_speech(request, model_info)
+    assert audio[:4] == b"RIFF"
 
 
 def test_generate_requires_transcript_when_reference_audio_present(monkeypatch):

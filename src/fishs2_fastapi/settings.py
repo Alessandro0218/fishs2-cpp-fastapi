@@ -48,6 +48,7 @@ class Settings(BaseSettings):
     verbose: bool = True
 
     min_reference_audio_seconds: float = Field(default=0.0, ge=0.0)
+    reference_prompt_cache_size: int = Field(default=32, ge=0, le=1024)
 
     model_config = {"env_prefix": "fishs2_", "env_file": ".env", "extra": "ignore"}
 

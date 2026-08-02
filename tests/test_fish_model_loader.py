@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import fishs2_fastapi.model_loader as model_loader
 import pytest
+
+from fishs2_fastapi import model_loader
 
 
 def _fake_native_class(*, with_shared_init: bool, with_gpu_layer_export: bool):
@@ -11,6 +12,9 @@ def _fake_native_class(*, with_shared_init: bool, with_gpu_layer_export: bool):
         def __init__(self, dll_path: Path):
             _ = dll_path
             self.calls: list[tuple[str, int | None]] = []
+            self.prompt_init_calls = 0
+            self.prompt_release_calls = 0
+            self.synthesis_reference_paths: list[bytes | None] = []
             self.initialize_audio_codec_model_shared = (
                 self._initialize_audio_codec_model_shared if with_shared_init else None
             )
@@ -89,6 +93,26 @@ def _fake_native_class(*, with_shared_init: bool, with_gpu_layer_export: bool):
             self.calls.append(("codec", None))
             return 1
 
+        def alloc_audio_prompt_codes(self):
+            return object()
+
+        def release_audio_prompt_codes(self, handle):
+            _ = handle
+            self.prompt_release_calls += 1
+
+        def initialize_audio_prompt_codes(
+            self,
+            pipeline_handle,
+            n_threads,
+            reference_audio_path,
+            prompt_codes_handle,
+            t_prompt,
+        ) -> int:
+            _ = (pipeline_handle, n_threads, reference_audio_path, prompt_codes_handle)
+            self.prompt_init_calls += 1
+            t_prompt._obj.value = 8
+            return 1
+
         def initialize_tokenizer(self, tokenizer_handle, tokenizer_path) -> int:
             _ = (tokenizer_handle, tokenizer_path)
             return 1
@@ -127,6 +151,33 @@ def _fake_native_class(*, with_shared_init: bool, with_gpu_layer_export: bool):
                 n_threads,
                 verbose,
             )
+            return 1
+
+        def synthesize(
+            self,
+            pipeline_handle,
+            generate_params_handle,
+            audio_buffer_handle,
+            prompt_codes_handle,
+            t_prompt,
+            reference_audio_path,
+            reference_audio_transcript,
+            text,
+            output_audio_path,
+            output_length,
+        ) -> int:
+            _ = (
+                pipeline_handle,
+                generate_params_handle,
+                audio_buffer_handle,
+                prompt_codes_handle,
+                t_prompt,
+                reference_audio_transcript,
+                text,
+            )
+            self.synthesis_reference_paths.append(reference_audio_path)
+            Path(output_audio_path.decode("utf-8")).write_bytes(b"RIFF" + (b"0" * 64))
+            output_length._obj.value = 16
             return 1
 
     return FakeNative
@@ -207,6 +258,50 @@ def test_runtime_uses_shared_init_when_n_gpu_layers_auto(monkeypatch, tmp_path):
     assert ("model_with_layers", -1) not in runtime._native.calls
 
     runtime.close()
+
+
+def test_runtime_caches_reference_prompt_codes(monkeypatch, tmp_path):
+    _patch_runtime_dependencies(monkeypatch, tmp_path)
+    monkeypatch.setattr(model_loader.settings, "n_gpu_layers", -1)
+    monkeypatch.setattr(model_loader.settings, "reference_prompt_cache_size", 2)
+    monkeypatch.setattr(model_loader.settings, "temp_dir", tmp_path / "temp")
+    monkeypatch.setattr(
+        model_loader,
+        "_S2Native",
+        _fake_native_class(with_shared_init=True, with_gpu_layer_export=True),
+    )
+    reference = tmp_path / "voice.wav"
+    reference.write_bytes(b"reference-audio")
+    params = model_loader.S2GenerateParams(128, 0.8, 0.8, 30, 0, 1, False)
+
+    runtime = model_loader.S2Runtime("fishaudio/s2-pro")
+    first = runtime.synthesize_to_wav_bytes(
+        text="first",
+        params=params,
+        reference_audio_path=str(reference),
+        reference_text="reference",
+    )
+    second = runtime.synthesize_to_wav_bytes(
+        text="second",
+        params=params,
+        reference_audio_path=str(reference),
+        reference_text="reference",
+    )
+
+    assert first.startswith(b"RIFF")
+    assert second.startswith(b"RIFF")
+    assert runtime._native.prompt_init_calls == 1
+    assert runtime._native.synthesis_reference_paths == [None, None]
+    assert runtime.prompt_cache_info() == {
+        "entries": 1,
+        "capacity": 2,
+        "hits": 1,
+        "misses": 1,
+    }
+
+    native = runtime._native
+    runtime.close()
+    assert native.prompt_release_calls == 1
 
 
 def test_preload_runtime_dependencies_requires_ggml_base(monkeypatch, tmp_path):

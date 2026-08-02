@@ -8,12 +8,13 @@ import hashlib
 import logging
 import os
 import platform
+import shutil
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
 import zipfile
-import shutil
 from pathlib import Path
 
 logging.basicConfig(
@@ -127,48 +128,99 @@ def _sha256_file(path: Path) -> str:
 def _download_file(url: str, destination: Path, *, label: str) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
     temp_target = destination.with_suffix(destination.suffix + ".part")
-    if temp_target.exists():
-        temp_target.unlink()
+    try:
+        attempts = max(1, min(10, int(os.environ.get("FISHS2_DOWNLOAD_ATTEMPTS", "5"))))
+    except ValueError:
+        attempts = 5
 
-    request = urllib.request.Request(url, headers={"User-Agent": "fishs2-fastapi-bootstrap/0.1"})
     log.info("Downloading %s", label)
     log.info("  from: %s", url)
     log.info("  to:   %s", destination)
 
-    try:
-        with urllib.request.urlopen(request, timeout=120) as response, temp_target.open("wb") as output:
-            total_header = response.headers.get("Content-Length")
-            total_size = int(total_header) if total_header and total_header.isdigit() else 0
-            downloaded = 0
-            progress_step = 256 * 1024 * 1024
-            next_report = progress_step
+    for attempt in range(1, attempts + 1):
+        resume_at = temp_target.stat().st_size if temp_target.is_file() else 0
+        headers = {"User-Agent": "fishs2-fastapi-bootstrap/0.1"}
+        if resume_at:
+            headers["Range"] = f"bytes={resume_at}-"
+            log.info("  resuming at %s (attempt %d/%d)", _format_bytes(resume_at), attempt, attempts)
+        request = urllib.request.Request(url, headers=headers)
 
-            while True:
-                chunk = response.read(1024 * 1024)
-                if not chunk:
-                    break
-                output.write(chunk)
-                downloaded += len(chunk)
+        try:
+            with urllib.request.urlopen(request, timeout=120) as response:
+                status = int(getattr(response, "status", response.getcode() or 200))
+                append = bool(resume_at and status == 206)
+                if append:
+                    content_range = response.headers.get("Content-Range", "")
+                    try:
+                        range_start = int(content_range.split()[1].split("-", 1)[0])
+                    except (IndexError, ValueError) as exc:
+                        raise RuntimeError(
+                            "The download server returned a partial response without "
+                            "a valid Content-Range header"
+                        ) from exc
+                    if range_start != resume_at:
+                        raise RuntimeError(
+                            "The download server resumed from the wrong byte: "
+                            f"requested {resume_at}, received {range_start}"
+                        )
+                if resume_at and not append:
+                    log.warning("  download server ignored the range request; restarting from zero")
+                    resume_at = 0
 
-                if total_size > 0 and downloaded >= next_report:
-                    percent = min(100.0, (downloaded / total_size) * 100.0)
-                    log.info(
-                        "  progress: %.1f%% (%s / %s)",
-                        percent,
-                        _format_bytes(downloaded),
-                        _format_bytes(total_size),
-                    )
-                    next_report += progress_step
-
-            if total_size > 0 and downloaded != total_size:
-                raise RuntimeError(
-                    f"Download size mismatch for {label}: expected {total_size} bytes, got {downloaded} bytes"
+                total_header = response.headers.get("Content-Length")
+                response_size = (
+                    int(total_header)
+                    if total_header and total_header.isdigit()
+                    else 0
                 )
-    except (urllib.error.URLError, TimeoutError, OSError) as exc:
-        temp_target.unlink(missing_ok=True)
-        raise RuntimeError(f"Failed downloading {label}: {exc}") from exc
+                total_size = resume_at + response_size if append else response_size
+                downloaded = resume_at
+                progress_step = 256 * 1024 * 1024
+                next_report = (
+                    ((downloaded // progress_step) + 1) * progress_step
+                )
+                mode = "ab" if append else "wb"
 
-    temp_target.replace(destination)
+                with temp_target.open(mode) as output:
+                    while True:
+                        chunk = response.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        output.write(chunk)
+                        downloaded += len(chunk)
+
+                        if total_size > 0 and downloaded >= next_report:
+                            percent = min(100.0, (downloaded / total_size) * 100.0)
+                            log.info(
+                                "  progress: %.1f%% (%s / %s)",
+                                percent,
+                                _format_bytes(downloaded),
+                                _format_bytes(total_size),
+                            )
+                            next_report += progress_step
+
+                if total_size > 0 and downloaded != total_size:
+                    raise RuntimeError(
+                        f"Download size mismatch for {label}: expected "
+                        f"{total_size} bytes, got {downloaded} bytes"
+                    )
+        except (urllib.error.URLError, TimeoutError, OSError, RuntimeError) as exc:
+            if attempt >= attempts:
+                raise RuntimeError(
+                    f"Failed downloading {label} after {attempts} attempts: {exc}. "
+                    f"The partial download remains at {temp_target}."
+                ) from exc
+            delay = min(15, 2 ** (attempt - 1))
+            log.warning(
+                "  download interrupted (%s); retrying in %ds without discarding progress",
+                exc,
+                delay,
+            )
+            time.sleep(delay)
+            continue
+
+        temp_target.replace(destination)
+        return
 
 
 def _ensure_file(
@@ -251,8 +303,10 @@ def _compile_runtime_from_source(backend: str, runtime_dir: Path) -> None:
     if build_root.exists():
         try:
             shutil.rmtree(build_root)
-        except Exception:
-            pass
+        except OSError as exc:
+            raise RuntimeError(
+                f"Could not clear the previous s2.cpp build directory: {build_root}"
+            ) from exc
     build_root.mkdir(parents=True, exist_ok=True)
 
     try:
@@ -314,10 +368,7 @@ def _compile_runtime_from_source(backend: str, runtime_dir: Path) -> None:
         log.info("Successfully compiled and installed s2.cpp runtime at %s", runtime_dir)
 
     finally:
-        try:
-            shutil.rmtree(build_root, ignore_errors=True)
-        except Exception:
-            pass
+        shutil.rmtree(build_root, ignore_errors=True)
 
 
 def _ensure_runtime_bundle(*, force: bool) -> None:
@@ -450,6 +501,7 @@ def detect_nvidia_gpu() -> tuple[bool, str]:
         result = subprocess.run(
             ["nvidia-smi", "-L"],
             capture_output=True,
+            check=False,
             text=True,
             timeout=15,
         )
@@ -514,7 +566,7 @@ def start_server(*, host: str, port: int) -> None:
     log.info("Starting FishS2 FastAPI server...\n")
     sys.stdout.flush()
     sys.stderr.flush()
-    proc = subprocess.run(cmd, env=env)
+    proc = subprocess.run(cmd, env=env, check=False)
     sys.exit(proc.returncode)
 
 

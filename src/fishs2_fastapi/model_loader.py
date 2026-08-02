@@ -6,6 +6,7 @@ import os
 import platform
 import subprocess
 import sys
+from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 from threading import RLock
@@ -70,6 +71,12 @@ class S2GenerateParams:
     verbose: bool
 
 
+@dataclass(slots=True)
+class _PromptCacheEntry:
+    handle: Any
+    t_prompt: int
+
+
 def _project_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
@@ -124,6 +131,7 @@ def ensure_nvidia_gpu_available() -> None:
         result = subprocess.run(
             ["nvidia-smi", "-L"],
             capture_output=True,
+            check=False,
             text=True,
             timeout=15,
         )
@@ -350,6 +358,31 @@ class _S2Native:
             required=False,
         )
 
+        self.alloc_audio_prompt_codes = self._bind(
+            "AllocS2AudioPromptCodes",
+            [],
+            ctypes.c_void_p,
+            required=False,
+        )
+        self.release_audio_prompt_codes = self._bind(
+            "ReleaseS2AudioPromptCodes",
+            [ctypes.c_void_p],
+            None,
+            required=False,
+        )
+        self.initialize_audio_prompt_codes = self._bind(
+            "InitializeAudioPromptCodes",
+            [
+                ctypes.c_void_p,
+                ctypes.c_int32,
+                ctypes.c_char_p,
+                ctypes.c_void_p,
+                ctypes.POINTER(ctypes.c_int32),
+            ],
+            ctypes.c_int,
+            required=False,
+        )
+
         self.alloc_audio_buffer = self._bind("AllocS2AudioBuffer", [ctypes.c_int32], ctypes.c_void_p)
         self.release_audio_buffer = self._bind("ReleaseS2AudioBuffer", [ctypes.c_void_p], None)
 
@@ -402,6 +435,10 @@ class S2Runtime:
         self._pipeline_handle: Any = None
         self._generate_params_handle: Any = None
         self._audio_buffer_handle: Any = None
+        self._prompt_cache: OrderedDict[tuple[str, int, int], _PromptCacheEntry] = OrderedDict()
+        self._prompt_cache_lock = RLock()
+        self._prompt_cache_hits = 0
+        self._prompt_cache_misses = 0
         self._load_lock = RLock()
         self._loaded = False
 
@@ -598,6 +635,103 @@ class S2Runtime:
         self._load()
         self._apply_generate_params(params)
 
+    @staticmethod
+    def _reference_fingerprint(reference_audio_path: str) -> tuple[str, int, int]:
+        path = Path(reference_audio_path).expanduser()
+        try:
+            resolved = path.resolve()
+            stat = resolved.stat()
+            return (str(resolved), stat.st_size, stat.st_mtime_ns)
+        except OSError:
+            return (str(path), -1, -1)
+
+    def _release_prompt_codes(self, handle: Any) -> None:
+        if not handle or self._native is None:
+            return
+        release = self._native.release_audio_prompt_codes
+        if release is not None:
+            release(handle)
+
+    def _reference_prompt_codes(
+        self,
+        reference_audio_path: str | None,
+        *,
+        n_threads: int,
+    ) -> tuple[Any, ctypes.c_int32, bytes | None, bool]:
+        """Return prompt codes, T-prompt, fallback path, and ephemeral ownership."""
+        if self._native is None:
+            raise S2RuntimeUnavailable("FishS2 runtime is not initialized.")
+
+        alloc = self._native.alloc_audio_prompt_codes
+        initialize = self._native.initialize_audio_prompt_codes
+        release = self._native.release_audio_prompt_codes
+
+        if not reference_audio_path:
+            # Newer s2.cpp releases dereference this vector even without a voice.
+            handle = alloc() if alloc is not None else None
+            return handle, ctypes.c_int32(0), None, bool(handle and release is not None)
+
+        cache_size = max(int(settings.reference_prompt_cache_size), 0)
+        key = self._reference_fingerprint(reference_audio_path)
+        if cache_size and alloc is not None and initialize is not None:
+            with self._prompt_cache_lock:
+                cached = self._prompt_cache.get(key)
+                if cached is not None:
+                    self._prompt_cache.move_to_end(key)
+                    self._prompt_cache_hits += 1
+                    return cached.handle, ctypes.c_int32(cached.t_prompt), None, False
+                self._prompt_cache_misses += 1
+
+            handle = alloc()
+            if handle:
+                t_prompt = ctypes.c_int32(0)
+                code = initialize(
+                    self._pipeline_handle,
+                    int(n_threads),
+                    _cstring(reference_audio_path),
+                    handle,
+                    ctypes.byref(t_prompt),
+                )
+                if code == S2_SUCCESS_CODE and t_prompt.value > 0:
+                    with self._prompt_cache_lock:
+                        self._prompt_cache[key] = _PromptCacheEntry(handle, t_prompt.value)
+                        self._prompt_cache.move_to_end(key)
+                        while len(self._prompt_cache) > cache_size:
+                            _, evicted = self._prompt_cache.popitem(last=False)
+                            self._release_prompt_codes(evicted.handle)
+                    return handle, ctypes.c_int32(t_prompt.value), None, False
+                self._release_prompt_codes(handle)
+                logger.warning(
+                    "FishS2 reference prompt precomputation failed; using request-local encoding",
+                    extra={"code": code, "reference_audio_path": reference_audio_path},
+                )
+
+        # Compatibility path for older runtimes, a disabled cache, or a failed
+        # precompute. A fresh vector is important because S2Synthesize mutates it.
+        handle = alloc() if alloc is not None else None
+        return (
+            handle,
+            ctypes.c_int32(0),
+            _optional_cstring(reference_audio_path),
+            bool(handle and release is not None),
+        )
+
+    def prompt_cache_info(self) -> dict[str, int]:
+        with self._prompt_cache_lock:
+            return {
+                "entries": len(self._prompt_cache),
+                "capacity": max(int(settings.reference_prompt_cache_size), 0),
+                "hits": self._prompt_cache_hits,
+                "misses": self._prompt_cache_misses,
+            }
+
+    def clear_prompt_cache(self) -> None:
+        with self._prompt_cache_lock:
+            entries = list(self._prompt_cache.values())
+            self._prompt_cache.clear()
+        for entry in entries:
+            self._release_prompt_codes(entry.handle)
+
     def synthesize_to_wav_bytes(
         self,
         *,
@@ -619,15 +753,28 @@ class S2Runtime:
             output_path = temp_dir / f"fishs2_{uuid4().hex}.wav"
 
         output_length = ctypes.c_int32(0)
+        prompt_codes = None
+        prompt_t = ctypes.c_int32(0)
+        reference_path_arg = _optional_cstring(reference_audio_path)
+        release_prompt_codes = False
         code: int
         try:
+            (
+                prompt_codes,
+                prompt_t,
+                reference_path_arg,
+                release_prompt_codes,
+            ) = self._reference_prompt_codes(
+                reference_audio_path,
+                n_threads=params.n_threads,
+            )
             code = self._native.synthesize(
                 self._pipeline_handle,
                 self._generate_params_handle,
                 self._audio_buffer_handle,
-                None,
-                None,
-                _optional_cstring(reference_audio_path),
+                prompt_codes,
+                ctypes.byref(prompt_t),
+                reference_path_arg,
                 _cstring(reference_text or ""),
                 _cstring(text),
                 _cstring(str(output_path)),
@@ -648,6 +795,8 @@ class S2Runtime:
 
             return output_path.read_bytes()
         finally:
+            if release_prompt_codes:
+                self._release_prompt_codes(prompt_codes)
             try:
                 output_path.unlink(missing_ok=True)
             except OSError:
@@ -658,6 +807,8 @@ class S2Runtime:
             native = self._native
             if native is None:
                 return
+
+            self.clear_prompt_cache()
 
             if self._audio_buffer_handle:
                 native.release_audio_buffer(self._audio_buffer_handle)
@@ -685,4 +836,4 @@ class S2Runtime:
         try:
             self.close()
         except Exception:
-            pass
+            logger.debug("Failed closing FishS2 runtime during finalization", exc_info=True)

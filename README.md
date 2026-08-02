@@ -62,6 +62,7 @@ You can override artifact paths and sources with env vars:
 - `FISHS2_SKIP_DOWNLOADS=true`
 - `FISHS2_FORCE_DOWNLOADS=true`
 - `FISHS2_N_GPU_LAYERS` (default: `-1`)
+- `FISHS2_REFERENCE_PROMPT_CACHE_SIZE` (default: `32`; set `0` to disable)
 
 ## Required Endpoints
 
@@ -260,6 +261,16 @@ python run.py --force-downloads
 3. Ensure CUDA runtime libraries are available to the process (`cudart64_12.dll`, `cublas64_12.dll`).
 
 ## Local Cache Policy
+
+The service uses s2.cpp's precomputed prompt-code API and keeps recently used reference
+voices in a bounded native LRU cache. Repeated segments with the same reference audio skip
+codec re-encoding; the cache key includes the resolved file path, size, and modification time.
+Native prompt-code handles are released on eviction, voice changes, model refresh, and shutdown.
+
+Large model downloads are written to a `.part` file and resumed after transient network
+failures. The bootstrapper retries five times by default; set `FISHS2_DOWNLOAD_ATTEMPTS`
+to a value from 1 to 10 to change that bounded retry budget. An incomplete file is retained
+for the next launch instead of being discarded.
 
 The bootstrapper forces local, portable cache locations inside this repo:
 
