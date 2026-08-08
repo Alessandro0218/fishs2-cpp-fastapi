@@ -77,7 +77,8 @@ Compatibility aliases and fallbacks:
 - `POST /v1/audio/voices` (voice upload)
 - `POST /v1/files` (legacy upload fallback)
 - `GET /v1/files` (legacy voice discovery fallback)
-- `DELETE /v1/voices/{voice_id}` (optional cleanup)
+- `DELETE /v1/audio/voices/{voice_id}` (managed voice cleanup)
+- `DELETE /v1/voices/{voice_id}` (cleanup alias)
 
 ## Model Policy
 
@@ -212,7 +213,7 @@ curl -X POST http://127.0.0.1:8020/v1/audio/speech \
 ### 7) Delete an uploaded voice profile
 
 ```bash
-curl -X DELETE http://127.0.0.1:8020/v1/voices/sample_male
+curl -X DELETE http://127.0.0.1:8020/v1/audio/voices/sample_male
 ```
 
 ## Voice Upload Notes

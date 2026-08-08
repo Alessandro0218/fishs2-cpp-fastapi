@@ -34,7 +34,20 @@ class VoiceStore:
         self._base_dir.mkdir(parents=True, exist_ok=True)
 
     def _voice_path(self, voice_id: str) -> Path:
-        return self._base_dir / voice_id
+        candidate_id = str(voice_id or "").strip()
+        if (
+            not candidate_id
+            or candidate_id in {".", ".."}
+            or Path(candidate_id).name != candidate_id
+            or any(ord(character) < 32 for character in candidate_id)
+        ):
+            raise ValueError("Invalid voice ID")
+        root = self._base_dir.resolve(strict=False)
+        candidate = self._base_dir / candidate_id
+        resolved = candidate.resolve(strict=False)
+        if resolved.parent != root or candidate.is_symlink():
+            raise ValueError("Voice path must remain inside the voices directory")
+        return candidate
 
     def _meta_path(self, voice_id: str) -> Path:
         return self._voice_path(voice_id) / "meta.json"
@@ -99,7 +112,7 @@ class VoiceStore:
         registered = 0
         entries = sorted(self._base_dir.iterdir(), key=lambda item: item.name.lower())
         for entry in entries:
-            if not entry.is_dir():
+            if not entry.is_dir() or entry.is_symlink():
                 continue
 
             voice_id = entry.name
@@ -158,7 +171,7 @@ class VoiceStore:
         if not self._base_dir.is_dir():
             return voices
         for entry in sorted(self._base_dir.iterdir(), key=lambda item: item.name.lower()):
-            if not entry.is_dir():
+            if not entry.is_dir() or entry.is_symlink():
                 continue
             meta_path = entry / "meta.json"
             if not meta_path.is_file():
@@ -173,8 +186,13 @@ class VoiceStore:
             return []
 
         samples: list[Path] = []
+        root = vpath.resolve(strict=False)
         for file_path in sorted(vpath.iterdir(), key=lambda item: item.name.lower()):
-            if not file_path.is_file():
+            if (
+                not file_path.is_file()
+                or file_path.is_symlink()
+                or file_path.resolve(strict=False).parent != root
+            ):
                 continue
             if file_path.name.lower() == "meta.json":
                 continue

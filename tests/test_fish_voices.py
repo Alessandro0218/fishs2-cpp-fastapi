@@ -2,9 +2,12 @@ from __future__ import annotations
 
 from uuid import uuid4
 
+import pytest
 from fastapi.testclient import TestClient
 
 from fishs2_fastapi.main import app
+from fishs2_fastapi.settings import settings
+from fishs2_fastapi.voices import VoiceStore
 
 client = TestClient(app)
 
@@ -42,5 +45,20 @@ def test_create_and_delete_voice_with_files_field():
     ids = [item["voice_id"] for item in listed.json()["data"]]
     assert voice_id in ids
 
-    deleted = client.delete(f"/v1/voices/{voice_id}")
+    deleted = client.delete(f"/v1/audio/voices/{voice_id}")
     assert deleted.status_code == 200
+
+
+def test_voice_store_rejects_paths_outside_voice_root(tmp_path, monkeypatch):
+    voice_root = tmp_path / "voices"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    marker = outside / "keep.txt"
+    marker.write_text("keep", encoding="utf-8")
+    monkeypatch.setattr(settings, "voices_dir", voice_root)
+
+    store = VoiceStore()
+    with pytest.raises(ValueError, match="Invalid voice ID"):
+        store.delete("../outside")
+
+    assert marker.read_text(encoding="utf-8") == "keep"
