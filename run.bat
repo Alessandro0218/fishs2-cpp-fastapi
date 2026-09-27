@@ -80,4 +80,4 @@ if not exist "%PROJECT_DIR%\.pixi\envs\default\python.exe" (
 
 :: Start bootstrapper
 cd /d "%PROJECT_DIR%"
-"%PIXI_EXE%" run python run.py %*
+"%PIXI_EXE%" run python -s run.py %*

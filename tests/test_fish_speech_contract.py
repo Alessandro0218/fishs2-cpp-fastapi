@@ -13,7 +13,7 @@ def test_speech_unsupported_format():
             "model": "fishs2",
             "input": "Hello",
             "voice": "default",
-            "response_format": "mp3",
+            "response_format": "flac",
         },
     )
     assert resp.status_code == 422
@@ -148,3 +148,38 @@ def test_speech_accepts_reference_aliases(monkeypatch):
     assert resp.status_code == 200
     assert captured["reference_audio"] == "E:/voices/ref.wav"
     assert captured["reference_text"] == "Alias transcript."
+
+
+def test_speech_mp3_output(monkeypatch):
+    import io
+    import shutil
+    import wave
+
+    if shutil.which("ffmpeg") is None:
+        pytest.skip("ffmpeg not available")
+
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(44100)
+        w.writeframes(bytes(2 * 4410))
+    wav_bytes = buf.getvalue()
+
+    async def fake_generate(request, model_info=None):
+        return wav_bytes
+
+    monkeypatch.setattr("fishs2_fastapi.main.engine.generate_speech_async", fake_generate)
+
+    resp = client.post(
+        "/v1/audio/speech",
+        json={
+            "model": "fishs2",
+            "input": "Hello",
+            "voice": "default",
+            "response_format": "mp3",
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "audio/mpeg"
+    assert resp.content[:3] == b"ID3" or resp.content[0] == 0xFF

@@ -554,6 +554,7 @@ def start_server(*, host: str, port: int) -> None:
         "--manifest-path",
         str(manifest),
         "python",
+        "-s",
         "-m",
         "uvicorn",
         SERVER_MODULE,

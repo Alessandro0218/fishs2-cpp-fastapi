@@ -1,0 +1,28 @@
+<header class="topbar">
+  <h1>FishS2 Dashboard</h1>
+
+  <div class="server-config">
+    <input type="text" [(ngModel)]="baseUrlInput" name="baseUrl" placeholder="http://localhost:8020" />
+    <button type="button" (click)="applyBaseUrl()">Connetti</button>
+
+    @if (health()) {
+      <span class="status ok">● online — {{ health()!.backend }}, {{ health()!.voice_count }} voci</span>
+    } @else {
+      <span class="status ko">● {{ healthError() || 'verifica in corso…' }}</span>
+    }
+  </div>
+</header>
+
+<nav class="tabs">
+  <button type="button" [class.active]="activeTab() === 'speech'" (click)="setTab('speech')">Genera audio</button>
+  <button type="button" [class.active]="activeTab() === 'voices'" (click)="setTab('voices')">Voci</button>
+</nav>
+
+<main>
+  <div [hidden]="activeTab() !== 'speech'">
+    <app-speech [voices]="voices()"></app-speech>
+  </div>
+  <div [hidden]="activeTab() !== 'voices'">
+    <app-voices (voicesChanged)="onVoicesChanged($event)"></app-voices>
+  </div>
+</main>

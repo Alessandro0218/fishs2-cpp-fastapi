@@ -8,6 +8,7 @@
 models/*/
 models/*.gguf
 models/tokenizer.json
+whispers/
 
 # runtime artifacts
 runtime/

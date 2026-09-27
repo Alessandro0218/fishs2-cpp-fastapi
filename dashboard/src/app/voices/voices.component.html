@@ -1,0 +1,84 @@
+<section class="panel">
+  <h2>Nuova voce</h2>
+  <p class="hint">Carica un file audio <strong>WAV</strong> pulito (il motore FishS2 non legge correttamente mp3/altri formati compressi).</p>
+
+  <form (ngSubmit)="createVoice()" class="form-grid">
+    <label>
+      File audio (.wav)
+      <input type="file" accept=".wav,audio/wav" (change)="onFileSelected($event)" />
+    </label>
+
+    <label>
+      ID voce
+      <input type="text" [(ngModel)]="voiceId" name="voiceId" placeholder="es. voce_marco" required />
+    </label>
+
+    <label>
+      Nome (opzionale)
+      <input type="text" [(ngModel)]="voiceName" name="voiceName" placeholder="es. Marco" />
+    </label>
+
+    <label>
+      Lingua
+      <input type="text" [(ngModel)]="language" name="language" placeholder="it" />
+    </label>
+
+    <label class="full-width">
+      Trascrizione del campione audio (prompt_text)
+      <textarea [(ngModel)]="promptText" name="promptText" rows="3"
+        placeholder="Trascrivi esattamente ciò che dice l'audio caricato, aiuta la clonazione"></textarea>
+    </label>
+
+    <div class="actions">
+      <button type="submit" [disabled]="uploading()">
+        {{ uploading() ? 'Caricamento…' : 'Crea voce' }}
+      </button>
+    </div>
+
+    @if (uploadError()) {
+      <p class="error full-width">{{ uploadError() }}</p>
+    }
+  </form>
+</section>
+
+<section class="panel">
+  <div class="panel-header">
+    <h2>Voci salvate</h2>
+    <button type="button" (click)="refresh()" [disabled]="loading()">
+      {{ loading() ? 'Aggiorno…' : 'Aggiorna' }}
+    </button>
+  </div>
+
+  @if (errorMessage()) {
+    <p class="error">{{ errorMessage() }}</p>
+  }
+
+  @if (!loading() && voices().length === 0) {
+    <p class="hint">Nessuna voce salvata.</p>
+  }
+
+  @if (voices().length > 0) {
+    <table>
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Lingua</th>
+          <th>Campioni</th>
+          <th>Creata</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (voice of voices(); track voice.voice_id) {
+          <tr>
+            <td>{{ voice.voice_id }}</td>
+            <td>{{ voice.language || '—' }}</td>
+            <td>{{ voice.files.length }}</td>
+            <td>{{ formatDate(voice.created) }}</td>
+            <td><button type="button" class="danger" (click)="deleteVoice(voice.voice_id)">Elimina</button></td>
+          </tr>
+        }
+      </tbody>
+    </table>
+  }
+</section>

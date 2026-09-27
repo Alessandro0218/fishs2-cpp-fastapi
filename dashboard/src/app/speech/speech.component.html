@@ -1,0 +1,72 @@
+<section class="panel">
+  <h2>Genera audio</h2>
+
+  <form (ngSubmit)="generate()" class="form-grid">
+    <label>
+      Modello
+      <input type="text" [(ngModel)]="model" name="model" placeholder="fishaudio/s2-pro" />
+    </label>
+
+    <label>
+      Voce
+      <select [(ngModel)]="voiceId" name="voiceId">
+        <option value="default">default (nessuna clonazione)</option>
+        @for (voice of voices; track voice.voice_id) {
+          <option [value]="voice.voice_id">{{ voice.voice_id }}</option>
+        }
+      </select>
+    </label>
+
+    <label>
+      Velocità
+      <input type="number" [(ngModel)]="speed" name="speed" min="0.25" max="4" step="0.1" />
+    </label>
+
+    <label class="full-width">
+      Testo da sintetizzare
+      <textarea [(ngModel)]="inputText" name="inputText" rows="4" placeholder="Scrivi qui il testo..."></textarea>
+    </label>
+
+    <div class="full-width">
+      <button type="button" class="link-button" (click)="advancedOpen = !advancedOpen">
+        {{ advancedOpen ? '▾' : '▸' }} Parametri avanzati (opzionali)
+      </button>
+    </div>
+
+    @if (advancedOpen) {
+      <label>
+        max_new_tokens
+        <input type="number" [(ngModel)]="maxNewTokens" name="maxNewTokens" min="1" max="8192" placeholder="1024 (default)" />
+      </label>
+      <label>
+        temperature
+        <input type="number" [(ngModel)]="temperature" name="temperature" min="0" max="2" step="0.05" placeholder="0.8 (default)" />
+      </label>
+      <label>
+        top_p
+        <input type="number" [(ngModel)]="topP" name="topP" min="0" max="1" step="0.05" placeholder="0.8 (default)" />
+      </label>
+      <label>
+        top_k
+        <input type="number" [(ngModel)]="topK" name="topK" min="0" max="500" placeholder="30 (default)" />
+      </label>
+    }
+
+    <div class="actions">
+      <button type="submit" [disabled]="generating()">
+        {{ generating() ? 'Generazione…' : 'Genera' }}
+      </button>
+    </div>
+
+    @if (errorMessage()) {
+      <p class="error full-width">{{ errorMessage() }}</p>
+    }
+  </form>
+
+  @if (audioUrl()) {
+    <div class="result">
+      <audio [src]="audioUrl()" controls></audio>
+      <a [href]="audioUrl()" [download]="audioFileName()" class="download-link">Scarica {{ audioFileName() }}</a>
+    </div>
+  }
+</section>

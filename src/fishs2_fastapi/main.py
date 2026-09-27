@@ -12,6 +12,7 @@ from fastapi.exception_handlers import (
     request_validation_exception_handler,
 )
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from pydantic import ValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -24,7 +25,7 @@ from .api_models import (
     VoiceCreateResponse,
     VoiceList,
 )
-from .audio import SUPPORTED_FORMATS
+from .audio import MEDIA_TYPES, SUPPORTED_FORMATS, AudioConversionError, convert_wav
 from .engine import engine
 from .errors import APIError
 from .logging_setup import (
@@ -61,6 +62,14 @@ app = FastAPI(
     description="OpenAI-compatible text-to-speech wrapper for Fish Audio S2",
     version=__version__,
     docs_url="/",
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origin_regex=r"http://(localhost|127\.0\.0\.1):\d+",
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
@@ -328,13 +337,13 @@ def _derive_voice_id(voice_id: str | None, name: str | None, first_filename: str
 
 async def _read_uploads(
     *,
-    files: list[UploadFile] | None = None,
+    files: list[UploadFile | str] | None = None,
     audio_sample: UploadFile | None = None,
     file: UploadFile | None = None,
 ) -> list[tuple[str, bytes]]:
     uploads: list[UploadFile] = []
     if files:
-        uploads.extend(files)
+        uploads.extend(item for item in files if isinstance(item, UploadFile))
     if audio_sample is not None:
         uploads.append(audio_sample)
     if file is not None:
@@ -352,7 +361,7 @@ async def _read_uploads(
 
 async def _create_voice_from_uploads(
     *,
-    files: list[UploadFile] | None,
+    files: list[UploadFile | str] | None,
     audio_sample: UploadFile | None,
     file: UploadFile | None,
     voice_id: str | None,
@@ -408,7 +417,7 @@ async def list_voices():
 
 @app.post("/v1/audio/voices", response_model=VoiceCreateResponse)
 async def create_voice(
-    files: list[UploadFile] | None = File(default=None, description="Audio sample files"),
+    files: list[UploadFile | str] | None = File(default=None, description="Audio sample files"),
     audio_sample: UploadFile | None = File(default=None, description="Single audio sample"),
     voice_id: str | None = Form(default=None, description="Custom voice ID"),
     name: str | None = Form(default=None, description="Optional display name"),
@@ -433,7 +442,7 @@ async def create_voice(
 @app.post("/v1/files", response_model=VoiceCreateResponse)
 async def create_file_legacy(
     file: UploadFile | None = File(default=None, description="Legacy single upload field"),
-    files: list[UploadFile] | None = File(default=None, description="XTTS-compatible upload field"),
+    files: list[UploadFile | str] | None = File(default=None, description="XTTS-compatible upload field"),
     audio_sample: UploadFile | None = File(default=None, description="Alternative single upload field"),
     voice_id: str | None = Form(default=None),
     name: str | None = Form(default=None),
@@ -470,12 +479,16 @@ async def delete_voice(voice_id: str):
     raise APIError(f"Voice '{voice_id}' not found", param="voice_id", code="voice_not_found", status=404)
 
 
-@app.post("/v1/audio/speech")
+@app.post(
+    "/v1/audio/speech",
+    responses={200: {"content": {"audio/wav": {}, "audio/mpeg": {}}}},
+    response_class=Response,
+)
 async def create_speech(body: CreateSpeechRequest):
     response_format = (body.response_format or "").strip().lower()
     if response_format not in SUPPORTED_FORMATS:
         raise APIError(
-            f"Unsupported response_format: {body.response_format}. FishS2 wrapper currently supports only 'wav'.",
+            f"Unsupported response_format: {body.response_format}. Supported formats: 'wav', 'mp3'.",
             param="response_format",
             code="unsupported_format",
             status=422,
@@ -502,4 +515,13 @@ async def create_speech(body: CreateSpeechRequest):
             status=503,
         ) from exc
 
-    return Response(content=wav_bytes, media_type="audio/wav")
+    try:
+        audio_bytes = await convert_wav(wav_bytes, response_format)
+    except AudioConversionError as exc:
+        raise APIError(
+            str(exc),
+            code="audio_conversion_failed",
+            status=500,
+        ) from exc
+
+    return Response(content=audio_bytes, media_type=MEDIA_TYPES[response_format])
