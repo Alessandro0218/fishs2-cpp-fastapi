@@ -50,6 +50,9 @@ class Settings(BaseSettings):
     min_reference_audio_seconds: float = Field(default=0.0, ge=0.0)
     reference_prompt_cache_size: int = Field(default=32, ge=0, le=1024)
 
+    whisper_model_path: Path = Path("whispers/ggml-large-v3.bin")
+    whisper_n_threads: int = Field(default=0, ge=0, le=512)
+
     model_config = {"env_prefix": "fishs2_", "env_file": ".env", "extra": "ignore"}
 
     @field_validator("model_aliases", mode="before")

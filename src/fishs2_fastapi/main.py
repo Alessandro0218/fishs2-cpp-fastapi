@@ -22,6 +22,7 @@ from .api_models import (
     CreateSpeechRequest,
     FishS2Params,
     ModelList,
+    TranscriptionResponse,
     VoiceCreateResponse,
     VoiceList,
 )
@@ -39,6 +40,7 @@ from .logging_setup import (
 from .model_loader import S2RuntimeUnavailable
 from .registry import registry
 from .settings import settings
+from .transcription import TranscriptionError, TranscriptionUnavailable, transcriber
 from .voices import normalize_voice_id, voice_store
 
 configure_file_logging(
@@ -462,6 +464,27 @@ async def create_file_legacy(
         language=language,
         prompt_text=prompt_text,
     )
+
+
+@app.post("/v1/audio/transcriptions", response_model=TranscriptionResponse)
+async def create_transcription(
+    file: UploadFile = File(..., description="Audio file to transcribe"),
+    model: str | None = Form(default=None, description="OpenAI-style compatibility field"),
+    language: str | None = Form(default=None, description="Language code (omit for auto-detect)"),
+):
+    _ = model
+    payload = await file.read()
+    if not payload:
+        raise APIError("Audio file is empty", param="file", code="missing_files")
+
+    try:
+        text = await transcriber.transcribe_async(payload, language)
+    except TranscriptionUnavailable as exc:
+        raise APIError(str(exc), code="transcription_not_available", status=503) from exc
+    except TranscriptionError as exc:
+        raise APIError(str(exc), param="file", code="invalid_audio", status=422) from exc
+
+    return TranscriptionResponse(text=text)
 
 
 @app.delete("/v1/audio/voices/{voice_id}")

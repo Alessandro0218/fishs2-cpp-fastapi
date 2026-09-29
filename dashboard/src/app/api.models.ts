@@ -39,6 +39,10 @@ export interface VoiceCreateResponse {
   created: number;
 }
 
+export interface TranscriptionResponse {
+  text: string;
+}
+
 export interface FishS2Params {
   max_new_tokens?: number | null;
   temperature?: number | null;

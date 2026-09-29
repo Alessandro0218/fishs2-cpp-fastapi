@@ -1,0 +1,23 @@
+.prompt-text-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.prompt-text-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.prompt-text-header button {
+  padding: 4px 12px;
+  font-size: 0.85rem;
+}
+
+.prompt-text-field .error {
+  margin: 0;
+}

@@ -26,6 +26,8 @@ export class VoicesComponent implements OnInit {
   voiceName = '';
   language = 'it';
   promptText = '';
+  transcribing = signal(false);
+  transcribeError = signal<string | null>(null);
 
   constructor(private api: ApiService) {}
 
@@ -52,6 +54,29 @@ export class VoicesComponent implements OnInit {
   onFileSelected(event: Event): void {
     const input = event.target as HTMLInputElement;
     this.selectedFile = input.files && input.files.length > 0 ? input.files[0] : null;
+    this.transcribeError.set(null);
+  }
+
+  transcribe(): void {
+    if (!this.selectedFile) {
+      this.transcribeError.set('Seleziona prima un file audio.');
+      return;
+    }
+    if (this.promptText.trim() && !confirm('Sovrascrivere la trascrizione già inserita?')) return;
+
+    this.transcribing.set(true);
+    this.transcribeError.set(null);
+    this.api.transcribe(this.selectedFile, this.language.trim() || undefined).subscribe({
+      next: (res) => {
+        this.promptText = res.text;
+        if (!res.text) this.transcribeError.set('Nessun parlato rilevato nell\'audio.');
+        this.transcribing.set(false);
+      },
+      error: async (err) => {
+        this.transcribeError.set(await extractErrorMessage(err));
+        this.transcribing.set(false);
+      },
+    });
   }
 
   createVoice(): void {

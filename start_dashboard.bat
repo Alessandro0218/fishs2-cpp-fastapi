@@ -2,7 +2,7 @@
 setlocal
 
 set "PROJECT_DIR=%~dp0"
-set "MODEL_QUANT=q6_k"
+set "MODEL_QUANT=q8_0"
 
 echo ============================================
 echo  FishS2 - Avvio backend + dashboard

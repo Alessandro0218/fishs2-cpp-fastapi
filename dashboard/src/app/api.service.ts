@@ -5,6 +5,7 @@ import {
   CreateSpeechRequest,
   HealthStatus,
   ModelList,
+  TranscriptionResponse,
   VoiceCreateResponse,
   VoiceList,
 } from './api.models';
@@ -50,6 +51,13 @@ export class ApiService {
     if (options.language) form.append('language', options.language);
     if (options.promptText) form.append('prompt_text', options.promptText);
     return this.http.post<VoiceCreateResponse>(`${this.baseUrl()}/v1/audio/voices`, form);
+  }
+
+  transcribe(file: File, language?: string): Observable<TranscriptionResponse> {
+    const form = new FormData();
+    form.append('file', file);
+    if (language) form.append('language', language);
+    return this.http.post<TranscriptionResponse>(`${this.baseUrl()}/v1/audio/transcriptions`, form);
   }
 
   deleteVoice(voiceId: string): Observable<unknown> {

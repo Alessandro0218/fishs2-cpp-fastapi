@@ -23,11 +23,20 @@
       <input type="text" [(ngModel)]="language" name="language" placeholder="it" />
     </label>
 
-    <label class="full-width">
-      Trascrizione del campione audio (prompt_text)
-      <textarea [(ngModel)]="promptText" name="promptText" rows="3"
+    <div class="full-width prompt-text-field">
+      <div class="prompt-text-header">
+        <label for="promptText">Trascrizione del campione audio (prompt_text)</label>
+        <button type="button" (click)="transcribe()" [disabled]="!selectedFile || transcribing() || uploading()"
+          title="Genera automaticamente la trascrizione con Whisper">
+          {{ transcribing() ? 'Trascrivo…' : 'Trascrivi con Whisper' }}
+        </button>
+      </div>
+      <textarea id="promptText" [(ngModel)]="promptText" name="promptText" rows="3"
         placeholder="Trascrivi esattamente ciò che dice l'audio caricato, aiuta la clonazione"></textarea>
-    </label>
+      @if (transcribeError()) {
+        <p class="error">{{ transcribeError() }}</p>
+      }
+    </div>
 
     <div class="actions">
       <button type="submit" [disabled]="uploading()">

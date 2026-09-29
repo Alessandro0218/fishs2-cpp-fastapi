@@ -44,6 +44,10 @@ class VoiceCreateResponse(BaseModel):
     created: int
 
 
+class TranscriptionResponse(BaseModel):
+    text: str
+
+
 class FishS2Params(BaseModel):
     max_new_tokens: int | None = Field(default=None, ge=1, le=8192)
     temperature: float | None = Field(default=None, ge=0.0, le=2.0)
